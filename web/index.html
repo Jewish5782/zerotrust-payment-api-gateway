@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Payment Policy Guard</title>
+  <style>
+    :root { --bg:#0f1419; --card:#1a222c; --line:#2c3845; --text:#e8eef4; --muted:#8aa0b5; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:14px/1.45 ui-sans-serif, system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:16px 22px; border-bottom:1px solid var(--line); }
+    h1 { margin:0; font-size:18px; }
+    header p { margin:4px 0 0; color:var(--muted); }
+    main { display:grid; grid-template-columns:1.1fr 1.2fr 1fr; gap:16px; padding:16px; }
+    section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; min-height:70vh; }
+    h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+    .hold { border:1px solid var(--line); border-radius:8px; padding:10px; margin:0 0 8px; }
+    button { background:#2a3b4d; color:var(--text); border:1px solid #3e5368; border-radius:6px; padding:6px 10px; cursor:pointer; }
+    button.ok { background:#163225; border-color:#1f4a34; }
+    button.danger { background:#4a1d1d; border-color:#6a2a2a; }
+    label { display:block; margin:8px 0 4px; color:var(--muted); font-size:12px; }
+    input, select { width:100%; background:#0f1419; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th,td { text-align:left; padding:5px 4px; border-bottom:1px solid var(--line); }
+    .muted { color:var(--muted); }
+    .row { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Payment Policy Guard</h1>
+    <p>Partner payouts that look risky sit in a hold queue. Funds move only after a reviewer acts. Portfolio lab — not a Hubtel system.</p>
+  </header>
+  <main>
+    <section>
+      <h2>Submit a payment</h2>
+      <label>API key</label>
+      <select id="key">
+        <option>pk_merchant_a</option>
+        <option>pk_merchant_b_receive_only</option>
+        <option>pk_merchant_c</option>
+      </select>
+      <label>Action</label>
+      <select id="action"><option>send</option><option>receive</option></select>
+      <label>Amount GHS</label>
+      <input id="amt" type="number" value="2200" />
+      <label>Destination wallet</label>
+      <input id="dest" value="W-NEW-DEST" />
+      <label><input type="checkbox" id="burst" /> mule-shaped extras</label>
+      <div class="row"><button class="ok" onclick="submitPay()">Submit signed request</button></div>
+      <p class="muted" id="last"></p>
+    </section>
+    <section>
+      <h2>Hold queue</h2>
+      <div id="holds"></div>
+    </section>
+    <section>
+      <h2>Ledger</h2>
+      <table id="led"></table>
+      <h2 style="margin-top:18px">Recent requests</h2>
+      <table id="req"></table>
+    </section>
+  </main>
+<script>
+async function refresh(){
+  const holds = await (await fetch('/v1/holds')).json();
+  document.getElementById('holds').innerHTML = holds.map(h => `
+    <div class="hold">
+      <strong>#${h.id}</strong> ${h.action} ${h.api_key}<br>
+      GHS ${h.body.amount_ghs||0} → ${h.body.dest_wallet||''} · score ${h.score}
+      <div class="muted">${(h.reasons||[]).join(' · ')}</div>
+      <div class="row">
+        <button class="ok" onclick="decide(${h.id},'approve')">Approve — release funds</button>
+        <button class="danger" onclick="decide(${h.id},'reject')">Reject</button>
+      </div>
+    </div>`).join('') || '<p class="muted">No open holds. Submit a large new-destination send.</p>';
+  const led = await (await fetch('/v1/ledger')).json();
+  document.getElementById('led').innerHTML = '<tr><th>account</th><th>GHS</th></tr>' +
+    led.map(r => `<tr><td>${r.account}</td><td>${Number(r.balance).toFixed(2)}</td></tr>`).join('');
+  const reqs = await (await fetch('/v1/requests')).json();
+  document.getElementById('req').innerHTML = '<tr><th>id</th><th>decision</th><th>action</th></tr>' +
+    reqs.map(r => `<tr><td>${r.id}</td><td>${r.decision}</td><td>${r.action}</td></tr>`).join('');
+}
+async function submitPay(){
+  const extras = document.getElementById('burst').checked ?
+    {sends_last_5min:8, unique_dests_last_5min:6, received_last_10min:4000} : {};
+  const body = {
+    api_key: document.getElementById('key').value,
+    sign_with_lab_secret: true,
+    amount_ghs: Number(document.getElementById('amt').value),
+    dest_wallet: document.getElementById('dest').value,
+    src_wallet: 'W-CUST-1',
+    idempotency_key: 'ui-'+Date.now(),
+    nonce: 'n-'+Date.now(),
+    ts: 1725000000,
+    ...extras
+  };
+  const action = document.getElementById('action').value;
+  const res = await (await fetch('/v1/'+action, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})).json();
+  document.getElementById('last').textContent = 'Engine: '+res.decision+' · '+(res.reasons||[]).join('; ');
+  await refresh();
+}
+async function decide(id, decision){
+  await fetch('/v1/holds/'+id, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({decision})});
+  await refresh();
+}
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
